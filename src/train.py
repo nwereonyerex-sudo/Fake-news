@@ -5,6 +5,7 @@ Model training script.
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 import numpy as np
@@ -15,8 +16,14 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.model import TorchTextClassifier, Vocabulary, build_model
-from src.preprocess import load_raw_data, preprocess_text
+from src.preprocess import load_raw_data, preprocess_text, strip_leading_dateline
 from src.save_model import ModelArtifact, save_artifact
+
+# Backstop for the ~0.8% of rows where strip_leading_dateline() doesn't
+# catch the outlet tag (e.g. a correction notice or byline pushes it past
+# the leading position) - specific to this dataset's known Reuters-dateline
+# shortcut (see load_training_data()'s docstring), not a general cleaning rule.
+_RESIDUAL_OUTLET_TAG_RE = re.compile(r"\(Reuters\)\s*-?\s*")
 
 RAW_DIR = Path(__file__).resolve().parent.parent / "data" / "raw"
 
@@ -31,6 +38,18 @@ class SingleClassDataError(RuntimeError):
 
 
 def load_training_data(fake_path: Path = RAW_DIR / "Fake.csv", real_path: Path | None = None) -> pd.DataFrame:
+    """Load and concatenate Fake.csv (+ True.csv if present).
+
+    Strips any leading wire-service dateline (e.g. "WASHINGTON (Reuters) -")
+    from `text`, uniformly across both classes, before returning. This
+    dataset pairing has a well-documented leakage shortcut: ~99% of the
+    real-news file carries a "(Reuters)" tag that ~0% of the fake-news
+    file does, which a model can trivially key off instead of learning
+    real fake-vs-real content signal. See the "Corrections & Clarifications"
+    build log and the project memory for the full investigation (a trivial
+    "(Reuters) in text" rule alone scored 99.5% on held-out data prior to
+    this fix).
+    """
     fake_path = Path(fake_path)
     real_path = Path(real_path) if real_path is not None else RAW_DIR / "True.csv"
 
@@ -47,6 +66,10 @@ def load_training_data(fake_path: Path = RAW_DIR / "Fake.csv", real_path: Path |
             f"{real_path} (e.g. the ISOT True.csv) before training; a classifier fit on "
             "a single class would trivially report perfect (and meaningless) metrics."
         )
+
+    df["text"] = df["text"].astype(str).apply(strip_leading_dateline).apply(
+        lambda t: _RESIDUAL_OUTLET_TAG_RE.sub("", t)
+    )
     return df
 
 
@@ -61,6 +84,7 @@ def train(
     min_freq: int = 2,
     test_size: float = 0.2,
     seed: int = 42,
+    patience: int = 3,
     fake_path: Path = RAW_DIR / "Fake.csv",
     real_path: Path | None = None,
 ) -> dict:
@@ -89,7 +113,12 @@ def train(
     y_train = torch.tensor(train_labels, dtype=torch.long)
     y_val = torch.tensor(val_labels, dtype=torch.long)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
     model = build_model(
         architecture, vocab_size=len(vocab), embed_dim=embed_dim, hidden_dim=hidden_dim, num_classes=2
     ).to(device)
@@ -99,6 +128,16 @@ def train(
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
+
+    # Early stopping: keep the weights from whichever epoch had the lowest
+    # val_loss, not just whatever epoch training happened to end on. Loss
+    # is judged on a real per-run basis (a well-trained run's val_loss
+    # legitimately jitters a little), so "improved" needs to clear a small
+    # epsilon rather than any decrease at all, or noise alone would keep
+    # resetting the patience counter and early stopping would never fire.
+    best_val_loss = float("inf")
+    best_state = None
+    epochs_without_improvement = 0
 
     history: dict[str, list[float]] = {"train_loss": [], "val_loss": []}
     for epoch in range(epochs):
@@ -123,14 +162,33 @@ def train(
 
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
-        print(f"epoch {epoch + 1}/{epochs}  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}")
+
+        if val_loss < best_val_loss - 1e-4:
+            best_val_loss = val_loss
+            best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+            epochs_without_improvement = 0
+            marker = " (best)"
+        else:
+            epochs_without_improvement += 1
+            marker = f" (no improvement, {epochs_without_improvement}/{patience})"
+
+        print(f"epoch {epoch + 1}/{epochs}  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}{marker}")
+
+        if epochs_without_improvement >= patience:
+            print(f"Early stopping at epoch {epoch + 1}: no val_loss improvement for {patience} epochs.")
+            break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
 
     wrapped = TorchTextClassifier(model=model.to("cpu"), vocab=vocab, max_len=max_len, device="cpu")
     artifact = ModelArtifact(
         model=wrapped,
         metadata={
             "architecture": architecture,
-            "epochs": epochs,
+            "epochs_requested": epochs,
+            "epochs_trained": len(history["train_loss"]),
+            "best_val_loss": best_val_loss,
             "vocab_size": len(vocab),
             "max_len": max_len,
             "train_size": len(train_texts),
@@ -138,7 +196,7 @@ def train(
         },
     )
     path = save_artifact(artifact)
-    print(f"Saved trained model to {path}")
+    print(f"Saved trained model to {path} (best val_loss={best_val_loss:.4f})")
     return history
 
 
@@ -148,8 +206,15 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--max-len", type=int, default=200)
+    parser.add_argument("--patience", type=int, default=3, help="stop after this many epochs with no val_loss improvement")
     args = parser.parse_args()
-    train(architecture=args.architecture, epochs=args.epochs, batch_size=args.batch_size, max_len=args.max_len)
+    train(
+        architecture=args.architecture,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        max_len=args.max_len,
+        patience=args.patience,
+    )
 
 
 if __name__ == "__main__":
