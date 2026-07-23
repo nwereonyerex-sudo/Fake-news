@@ -5,6 +5,7 @@ nltk
 spacy
 torch
 torch-geometric
+networkx
 transformers
 sentencepiece
 joblib
