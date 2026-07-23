@@ -6,6 +6,7 @@ spacy
 torch
 torch-geometric
 transformers
+sentencepiece
 joblib
 flask
 fastapi
