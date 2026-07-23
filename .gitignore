@@ -16,9 +16,11 @@ data/raw/*
 data/processed/*
 !data/processed/.gitkeep
 
-# Models (trained artifacts stay local, not versioned)
+# Models (trained artifacts stay local, not versioned - except the one
+# committed deliberately for Vercel/Render deployment to serve)
 models/*
 !models/.gitkeep
+!models/fake_news_classifier.joblib
 
 # Env
 .env
