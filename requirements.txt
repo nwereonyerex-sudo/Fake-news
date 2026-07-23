@@ -1,0 +1,15 @@
+numpy
+scikit-learn
+pandas
+nltk
+spacy
+gensim
+torch
+torch-geometric
+transformers
+joblib
+flask
+fastapi
+uvicorn
+pydantic
+requests
