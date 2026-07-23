@@ -89,7 +89,12 @@ def train(
     y_train = torch.tensor(train_labels, dtype=torch.long)
     y_val = torch.tensor(val_labels, dtype=torch.long)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
     model = build_model(
         architecture, vocab_size=len(vocab), embed_dim=embed_dim, hidden_dim=hidden_dim, num_classes=2
     ).to(device)
