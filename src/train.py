@@ -5,6 +5,7 @@ Model training script.
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 import numpy as np
@@ -15,8 +16,14 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.model import TorchTextClassifier, Vocabulary, build_model
-from src.preprocess import load_raw_data, preprocess_text
+from src.preprocess import load_raw_data, preprocess_text, strip_leading_dateline
 from src.save_model import ModelArtifact, save_artifact
+
+# Backstop for the ~0.8% of rows where strip_leading_dateline() doesn't
+# catch the outlet tag (e.g. a correction notice or byline pushes it past
+# the leading position) - specific to this dataset's known Reuters-dateline
+# shortcut (see load_training_data()'s docstring), not a general cleaning rule.
+_RESIDUAL_OUTLET_TAG_RE = re.compile(r"\(Reuters\)\s*-?\s*")
 
 RAW_DIR = Path(__file__).resolve().parent.parent / "data" / "raw"
 
@@ -31,6 +38,18 @@ class SingleClassDataError(RuntimeError):
 
 
 def load_training_data(fake_path: Path = RAW_DIR / "Fake.csv", real_path: Path | None = None) -> pd.DataFrame:
+    """Load and concatenate Fake.csv (+ True.csv if present).
+
+    Strips any leading wire-service dateline (e.g. "WASHINGTON (Reuters) -")
+    from `text`, uniformly across both classes, before returning. This
+    dataset pairing has a well-documented leakage shortcut: ~99% of the
+    real-news file carries a "(Reuters)" tag that ~0% of the fake-news
+    file does, which a model can trivially key off instead of learning
+    real fake-vs-real content signal. See the "Corrections & Clarifications"
+    build log and the project memory for the full investigation (a trivial
+    "(Reuters) in text" rule alone scored 99.5% on held-out data prior to
+    this fix).
+    """
     fake_path = Path(fake_path)
     real_path = Path(real_path) if real_path is not None else RAW_DIR / "True.csv"
 
@@ -47,6 +66,10 @@ def load_training_data(fake_path: Path = RAW_DIR / "Fake.csv", real_path: Path |
             f"{real_path} (e.g. the ISOT True.csv) before training; a classifier fit on "
             "a single class would trivially report perfect (and meaningless) metrics."
         )
+
+    df["text"] = df["text"].astype(str).apply(strip_leading_dateline).apply(
+        lambda t: _RESIDUAL_OUTLET_TAG_RE.sub("", t)
+    )
     return df
 
 

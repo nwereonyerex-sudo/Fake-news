@@ -24,6 +24,10 @@ _HTML_RE = re.compile(r"<.*?>")
 _NON_ALPHA_RE = re.compile(r"[^a-zA-Z\s]")
 _MULTI_SPACE_RE = re.compile(r"\s+")
 
+# Matches a leading wire-service dateline, e.g. "WASHINGTON (Reuters) - " or
+# "SEATTLE/WASHINGTON (Reuters) - " or just "(Reuters) - " with no city.
+_LEADING_DATELINE_RE = re.compile(r"^\s*(?:[A-Z][A-Za-z.,'/\- ]{0,80}?)?\([^()]{0,40}\)\s*-\s*")
+
 # Small, dependency-free lexicons for linguistic feature engineering.
 # These are heuristic signals, not ground truth - they feed the reasoning
 # layer (src/reasoning.py) and the model as auxiliary features, not a
@@ -57,6 +61,23 @@ def _ensure_nltk_data() -> None:
             nltk.data.find(path)
         except LookupError:
             nltk.download(package, quiet=True)
+
+
+def strip_leading_dateline(text: str) -> str:
+    """Remove a leading wire-service dateline (e.g. "WASHINGTON (Reuters) - ")
+    if present, otherwise return the text unchanged.
+
+    Call this - on both classes, uniformly - *before* clean_text() whenever
+    training data may come from wire-service sources. It exists because
+    the outlet tag inside the dateline can become a trivial source-based
+    shortcut: a model can learn "(Reuters) present" instead of any actual
+    fake-vs-real content signal (see the caveat in src/train.py). Applying
+    it uniformly, not just to the real-news class, keeps the cleaning step
+    itself label-independent.
+    """
+    if not isinstance(text, str):
+        return text
+    return _LEADING_DATELINE_RE.sub("", text, count=1)
 
 
 def clean_text(text: str) -> str:
