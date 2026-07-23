@@ -84,6 +84,7 @@ def train(
     min_freq: int = 2,
     test_size: float = 0.2,
     seed: int = 42,
+    patience: int = 3,
     fake_path: Path = RAW_DIR / "Fake.csv",
     real_path: Path | None = None,
 ) -> dict:
@@ -128,6 +129,16 @@ def train(
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
 
+    # Early stopping: keep the weights from whichever epoch had the lowest
+    # val_loss, not just whatever epoch training happened to end on. Loss
+    # is judged on a real per-run basis (a well-trained run's val_loss
+    # legitimately jitters a little), so "improved" needs to clear a small
+    # epsilon rather than any decrease at all, or noise alone would keep
+    # resetting the patience counter and early stopping would never fire.
+    best_val_loss = float("inf")
+    best_state = None
+    epochs_without_improvement = 0
+
     history: dict[str, list[float]] = {"train_loss": [], "val_loss": []}
     for epoch in range(epochs):
         model.train()
@@ -151,14 +162,33 @@ def train(
 
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
-        print(f"epoch {epoch + 1}/{epochs}  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}")
+
+        if val_loss < best_val_loss - 1e-4:
+            best_val_loss = val_loss
+            best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+            epochs_without_improvement = 0
+            marker = " (best)"
+        else:
+            epochs_without_improvement += 1
+            marker = f" (no improvement, {epochs_without_improvement}/{patience})"
+
+        print(f"epoch {epoch + 1}/{epochs}  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}{marker}")
+
+        if epochs_without_improvement >= patience:
+            print(f"Early stopping at epoch {epoch + 1}: no val_loss improvement for {patience} epochs.")
+            break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
 
     wrapped = TorchTextClassifier(model=model.to("cpu"), vocab=vocab, max_len=max_len, device="cpu")
     artifact = ModelArtifact(
         model=wrapped,
         metadata={
             "architecture": architecture,
-            "epochs": epochs,
+            "epochs_requested": epochs,
+            "epochs_trained": len(history["train_loss"]),
+            "best_val_loss": best_val_loss,
             "vocab_size": len(vocab),
             "max_len": max_len,
             "train_size": len(train_texts),
@@ -166,7 +196,7 @@ def train(
         },
     )
     path = save_artifact(artifact)
-    print(f"Saved trained model to {path}")
+    print(f"Saved trained model to {path} (best val_loss={best_val_loss:.4f})")
     return history
 
 
@@ -176,8 +206,15 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--max-len", type=int, default=200)
+    parser.add_argument("--patience", type=int, default=3, help="stop after this many epochs with no val_loss improvement")
     args = parser.parse_args()
-    train(architecture=args.architecture, epochs=args.epochs, batch_size=args.batch_size, max_len=args.max_len)
+    train(
+        architecture=args.architecture,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        max_len=args.max_len,
+        patience=args.patience,
+    )
 
 
 if __name__ == "__main__":
