@@ -1,0 +1,10 @@
+{
+  "rewrites": [
+    { "source": "/predict", "destination": "/api/predict" },
+    { "source": "/health", "destination": "/api/health" }
+  ],
+  "functions": {
+    "api/predict.js": { "maxDuration": 60 },
+    "api/health.js": { "maxDuration": 30 }
+  }
+}
