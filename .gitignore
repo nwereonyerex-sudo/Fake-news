@@ -22,3 +22,6 @@ models/*
 
 # Env
 .env
+
+# Kept local only, not published to the public repo
+README.md
