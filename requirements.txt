@@ -3,7 +3,6 @@ scikit-learn
 pandas
 nltk
 spacy
-gensim
 torch
 torch-geometric
 transformers
@@ -13,3 +12,4 @@ fastapi
 uvicorn
 pydantic
 requests
+certifi
