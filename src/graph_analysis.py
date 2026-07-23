@@ -48,6 +48,8 @@ def extract_node_features(graph: nx.DiGraph) -> np.ndarray:
         mutual = sum(1 for _, v in graph.out_edges(node) if graph.has_edge(v, node))
         reciprocity = mutual / outdeg if outdeg else 0.0
         features.append([degrees[node], clustering[node], in_out_ratio, reciprocity])
+    if not features:
+        return np.empty((0, len(NODE_FEATURE_NAMES)), dtype=np.float32)
     return np.asarray(features, dtype=np.float32)
 
 
@@ -176,8 +178,13 @@ def _simulate_bot_cascade(n_nodes: int, seed: int, core_fraction: float = 0.4) -
     inauthentic behavior signature (high density, high reciprocity)."""
     rng = np.random.default_rng(seed)
     graph = nx.DiGraph()
-    core_size = max(3, int(n_nodes * core_fraction))
+    core_size = min(n_nodes, max(3, int(n_nodes * core_fraction)))
     core = list(range(core_size))
+    # Add core nodes explicitly - add_edge() alone would only create a node
+    # once it gets an edge, so a too-small or (rarely, by chance) edge-less
+    # core would otherwise silently vanish from the graph instead of
+    # appearing as isolated nodes.
+    graph.add_nodes_from(core)
     for u in core:
         for v in core:
             if u != v and rng.random() < 0.7:
