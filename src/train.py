@@ -87,7 +87,24 @@ def train(
     patience: int = 3,
     fake_path: Path = RAW_DIR / "Fake.csv",
     real_path: Path | None = None,
+    save_path: Path | None = None,
 ) -> dict:
+    """Train and save a model artifact to models/fake_news_classifier.joblib.
+
+    `save_path` overrides where the artifact is written - pass a scratch
+    path when experimenting or testing, or a real run will silently
+    overwrite the production model with a throwaway one (this bit during
+    development: a quick sanity-check call clobbered a full-dataset,
+    early-stopped model with a 2,000-row test run's).
+    """
+    if epochs < 1:
+        raise ValueError(f"epochs must be >= 1, got {epochs} - epochs=0 would save an untrained, random-weights model")
+    if patience < 1:
+        raise ValueError(
+            f"patience must be >= 1, got {patience} - patience=0 stops after the very first epoch "
+            "regardless of whether it improved, which is never what's intended"
+        )
+
     df = load_training_data(fake_path, real_path)
 
     texts = df["text"].astype(str).tolist()
@@ -195,7 +212,7 @@ def train(
             "val_size": len(val_texts),
         },
     )
-    path = save_artifact(artifact)
+    path = save_artifact(artifact, save_path) if save_path is not None else save_artifact(artifact)
     print(f"Saved trained model to {path} (best val_loss={best_val_loss:.4f})")
     return history
 
