@@ -97,8 +97,10 @@ def evaluate_predictions(y_true, y_pred, label_names: dict[int, str] | None = No
 def evaluate_artifact(artifact, texts: list[str], y_true) -> EvaluationReport:
     """Evaluate a ModelArtifact (src/save_model.py) against held-out
     texts/labels. Works for any model satisfying the predict_proba(texts)
-    contract - the sklearn baseline or the PyTorch LSTM/GNN wrappers
-    alike - since it never touches the model internals directly.
+    contract - the sklearn baseline or the PyTorch LSTM wrapper alike -
+    since it never touches the model internals directly. Not applicable
+    to the GNN (src/graph_analysis.py): it classifies propagation graphs,
+    not raw text, so it doesn't implement this contract.
     """
     probs = artifact.model.predict_proba(texts)
     y_pred = np.argmax(probs, axis=1)
