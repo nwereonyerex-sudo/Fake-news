@@ -193,10 +193,12 @@ class TorchTextClassifier:
     device: str = "cpu"
 
     def predict_proba(self, texts: list[str]) -> np.ndarray:
-        from src.preprocess import preprocess_text
+        from src.preprocess import preprocess_text, strip_leading_dateline
 
         self.model.eval()
-        encoded = [self.vocab.encode(preprocess_text(t).split(), self.max_len) for t in texts]
+        encoded = [
+            self.vocab.encode(preprocess_text(strip_leading_dateline(t)).split(), self.max_len) for t in texts
+        ]
         batch = torch.tensor(encoded, dtype=torch.long, device=self.device)
         with torch.no_grad():
             probs = torch.softmax(self.model(batch), dim=1)
