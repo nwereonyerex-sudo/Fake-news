@@ -20,11 +20,23 @@ export default async function handler(req, res) {
     return;
   }
 
+  // Vercel lazily parses req.body on first access - if the client sent
+  // malformed JSON, accessing it here throws. Catch that separately from
+  // the fetch below so a client typo reports as 400, not a false "backend
+  // unreachable" 502.
+  let body;
+  try {
+    body = JSON.stringify(req.body);
+  } catch (err) {
+    res.status(400).json({ error: "Invalid JSON in request body", detail: String(err) });
+    return;
+  }
+
   try {
     const upstream = await fetch(`${backendUrl.replace(/\/$/, "")}/predict`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req.body),
+      body,
     });
     const data = await upstream.json();
     res.status(upstream.status).json(data);
